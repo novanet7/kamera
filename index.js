@@ -1,7 +1,7 @@
 const express = require('express');
 const app = express();
 
-// Halaman utama (broadcaster) - langsung minta izin kamera
+// Halaman utama (broadcaster) - dengan tombol untuk memulai siaran
 app.get('/', (req, res) => {
   res.send(`
 <!DOCTYPE html>
@@ -25,6 +25,20 @@ app.get('/', (req, res) => {
             border: 3px solid #333;
             border-radius: 10px;
             background: black;
+            display: none; /* disembunyikan sampai tombol ditekan */
+        }
+        button {
+            padding: 15px 30px;
+            font-size: 18px;
+            background: #2ecc71;
+            color: black;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 20px;
+        }
+        button:hover {
+            background: #27ae60;
         }
         .status {
             margin-top: 20px;
@@ -38,38 +52,53 @@ app.get('/', (req, res) => {
 </head>
 <body>
     <h1>📹 CCTV Broadcaster</h1>
-    <p>Halaman ini akan mengirimkan video kamera Anda ke admin.</p>
+    <p>Klik tombol di bawah untuk memulai siaran kamera ke admin.</p>
+    <button id="startBtn">Mulai Siaran</button>
     <video id="localVideo" autoplay playsinline muted></video>
-    <div id="status" class="status disconnected">⏳ Meminta izin kamera...</div>
+    <div id="status" class="status disconnected">⏳ Menunggu tindakan...</div>
 
     <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
     <script>
-        const peer = new Peer();
-        let localStream;
+        let peer = null;
+        let localStream = null;
+        let call = null;
         const statusDiv = document.getElementById('status');
+        const video = document.getElementById('localVideo');
+        const startBtn = document.getElementById('startBtn');
 
-        navigator.mediaDevices.getUserMedia({ video: true, audio: false })
-            .then(stream => {
-                localStream = stream;
-                document.getElementById('localVideo').srcObject = stream;
+        startBtn.addEventListener('click', async () => {
+            startBtn.disabled = true;
+            startBtn.textContent = 'Memulai...';
+            statusDiv.textContent = '⏳ Meminta izin kamera...';
+            statusDiv.className = 'status disconnected';
+
+            try {
+                localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+                video.srcObject = localStream;
+                video.style.display = 'block';
                 statusDiv.textContent = '✅ Kamera aktif. Menyiapkan koneksi...';
-                statusDiv.className = 'status';
 
+                peer = new Peer();
+                
                 peer.on('open', (id) => {
                     console.log('Peer ID:', id);
                     statusDiv.textContent = '🔗 Terhubung ke server, mencoba menghubungi admin...';
                     
-                    const call = peer.call('admin', stream);
+                    call = peer.call('admin', localStream);
                     
                     call.on('close', () => {
-                        statusDiv.textContent = '❌ Admin terputus. Menunggu reconnect...';
+                        statusDiv.textContent = '❌ Admin terputus. Klik tombol untuk memulai ulang.';
                         statusDiv.className = 'status disconnected';
+                        startBtn.disabled = false;
+                        startBtn.textContent = 'Mulai Siaran';
                     });
                     
                     call.on('error', (err) => {
                         console.error('Call error:', err);
                         statusDiv.textContent = '⚠️ Gagal terhubung ke admin. Pastikan admin online.';
                         statusDiv.className = 'status disconnected';
+                        startBtn.disabled = false;
+                        startBtn.textContent = 'Mulai Siaran';
                     });
                 });
 
@@ -77,13 +106,18 @@ app.get('/', (req, res) => {
                     console.error('Peer error:', err);
                     statusDiv.textContent = '❌ Koneksi ke server gagal. Periksa internet.';
                     statusDiv.className = 'status disconnected';
+                    startBtn.disabled = false;
+                    startBtn.textContent = 'Mulai Siaran';
                 });
-            })
-            .catch(err => {
+
+            } catch (err) {
                 console.error('Camera error:', err);
                 statusDiv.textContent = '❌ Gagal mengakses kamera. Berikan izin.';
                 statusDiv.className = 'status disconnected';
-            });
+                startBtn.disabled = false;
+                startBtn.textContent = 'Mulai Siaran';
+            }
+        });
     </script>
 </body>
 </html>
