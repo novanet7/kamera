@@ -1,6 +1,6 @@
 {
   "name": "camera-telegram",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Merekam video dan kirim ke Telegram (dengan konversi WebM ke MP4)",
   "main": "index.js",
   "scripts": {
@@ -12,6 +12,6 @@
     "axios": "^1.12.0",
     "form-data": "^4.0.4",
     "@ts-ffmpeg/fluent-ffmpeg": "^2.2.6",
-    "ffmpeg-static-latest": "^7.0.0"
+    "@ffmpeg-installer/ffmpeg": "^1.1.0"
   }
 }
